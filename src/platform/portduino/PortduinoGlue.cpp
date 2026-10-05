@@ -215,6 +215,10 @@ std::string cleanupNameForAutoconf(std::string name)
     return name;
 }
 
+/** A radio backend linked in (sim-mesh's simulated chip) installs its SPI chip and binds its
+ * pins here, after the configured pins and before SPI.begin(). */
+__attribute__((weak)) void native_radio_backend_init() {}
+
 /** apps run under portduino can optionally define a portduinoSetup() to
  * use portduino specific init code (such as gpioBind) to setup portduino on their host machine,
  * before running 'arduino' code.
@@ -668,6 +672,8 @@ void portduinoSetup()
             digitalWrite(i.pin, HIGH);
         }
     }
+
+    native_radio_backend_init();
 
     // Only initialize the radio pins when dealing with real, kernel controlled SPI hardware
     if (portduino_config.lora_spi_dev != "" && portduino_config.lora_spi_dev != "ch341") {

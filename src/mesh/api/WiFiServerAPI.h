@@ -29,3 +29,6 @@ class WiFiServerPort : public APIServerPort<WiFiServerAPI, WiFiServer>
 
 void initApiServer(int port = SERVER_API_DEFAULT_PORT);
 void deInitApiServer();
+#ifdef SIM_MESH
+void simMeshApiDue();
+#endif

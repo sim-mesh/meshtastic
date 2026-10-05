@@ -23,6 +23,14 @@ void deInitApiServer()
     }
 }
 
+#ifdef SIM_MESH
+void simMeshApiDue()
+{
+    if (apiPort)
+        apiPort->simMeshDue();
+}
+#endif
+
 WiFiServerAPI::WiFiServerAPI(WiFiClient &_client) : ServerAPI(_client)
 {
     api_type = TYPE_WIFI;

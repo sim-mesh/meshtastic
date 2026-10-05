@@ -35,6 +35,12 @@ class LockingArduinoHal : public ArduinoHal
     void spiTransfer(uint8_t *out, size_t len, uint8_t *in) override;
 
 #endif
+#ifdef SIM_MESH
+    /// RadioLib's busy waits (channel activity detection) idle until DIO1 rises instead of spinning.
+    void yield() override;
+    /// The simulated chip is never busy: a sub-millisecond settling wait after a transfer takes no time.
+    void delayMicroseconds(RadioLibTime_t us) override;
+#endif
 };
 
 #if defined(USE_STM32WLx)

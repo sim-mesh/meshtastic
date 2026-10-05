@@ -75,7 +75,11 @@ NRF52Bluetooth *nrf52Bluetooth = nullptr;
 
 #ifdef ARCH_PORTDUINO
 #include "linux/LinuxHardwareI2C.h"
+#ifndef SIM_MESH
 #include "mesh/raspihttp/PiWebServer.h"
+#else
+int rnode_idle_fd_ready(); // simradio-portduino: whether the last idle ended on a socket
+#endif
 #include "platform/portduino/PortduinoGlue.h"
 #include <cstdlib>
 #include <fstream>
@@ -377,6 +381,12 @@ void setup()
 #if ARCH_PORTDUINO
     RTCQuality ourQuality = RTCQualityDevice;
 
+#ifdef SIM_MESH
+    // The run's clock is the station's time source.
+    ourQuality = RTCQualityNTP;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+#else
     std::string timeCommandResult = exec("timedatectl status | grep synchronized | grep yes -c");
     if (timeCommandResult[0] == '1') {
         ourQuality = RTCQualityNTP;
@@ -385,6 +395,7 @@ void setup()
     struct timeval tv;
     tv.tv_sec = time(NULL);
     tv.tv_usec = 0;
+#endif
     perhapsSetRTC(ourQuality, &tv);
 #endif
 
@@ -1020,7 +1031,7 @@ void setup()
 #endif
 
 #ifdef ARCH_PORTDUINO
-#if __has_include(<ulfius.h>)
+#if __has_include(<ulfius.h>) && !defined(SIM_MESH)
     if (portduino_config.webserverport != -1) {
         piwebServerThread = new PiWebServerThread();
         std::atexit([] { delete piwebServerThread; });
@@ -1239,6 +1250,10 @@ void loop()
         LOG_DEBUG("main loop delay: %d", delayMsec);
 #endif
         mainDelay.delay(delayMsec);
+#ifdef SIM_MESH
+        if (rnode_idle_fd_ready())
+            simMeshApiDue();
+#endif
     }
 }
 #endif

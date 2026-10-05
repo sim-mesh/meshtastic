@@ -782,7 +782,14 @@ void Power::reboot()
         screen = nullptr;
     }
     LOG_DEBUG("final reboot!");
+#ifdef SIM_MESH
+    // The station restarts whole: the process that started this one starts it again.
+    fflush(stdout);
+    fflush(stderr);
+    exit(0);
+#else
     ::reboot();
+#endif
 #elif defined(ARCH_STM32WL)
     HAL_NVIC_SystemReset();
 #else

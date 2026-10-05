@@ -37,6 +37,21 @@ void LockingArduinoHal::spiTransfer(uint8_t *out, size_t len, uint8_t *in)
 }
 #endif
 
+#ifdef SIM_MESH
+void rnode_idle_radio(uint32_t max_ms); // simradio-portduino: ends on a DIO1 rise or a wake, not on input
+
+void LockingArduinoHal::yield()
+{
+    rnode_idle_radio(1);
+}
+
+void LockingArduinoHal::delayMicroseconds(RadioLibTime_t us)
+{
+    if (us >= 1000)
+        ArduinoHal::delayMicroseconds(us);
+}
+#endif
+
 RadioLibInterface::RadioLibInterface(LockingArduinoHal *hal, RADIOLIB_PIN_TYPE cs, RADIOLIB_PIN_TYPE irq, RADIOLIB_PIN_TYPE rst,
                                      RADIOLIB_PIN_TYPE busy, PhysicalLayer *_iface)
     : NotifiedWorkerThread("RadioIf"), module(hal, cs, irq, rst, busy), iface(_iface)

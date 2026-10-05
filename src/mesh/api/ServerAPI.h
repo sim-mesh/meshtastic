@@ -25,6 +25,11 @@ template <class T> class ServerAPI : public StreamAPI, private concurrency::OSTh
     /// Check the current underlying physical link to see if the client is currently connected
     virtual bool checkIsConnected() override;
 
+#ifdef SIM_MESH
+    /// Input waits on the socket: run now.
+    void simMeshDue() { setIntervalFromNow(0); }
+#endif
+
   protected:
     /// We override this method to prevent publishing EVENT_SERIAL_CONNECTED/DISCONNECTED for wifi links (we want the board to
     /// stay in the POWERED state to prevent disabling wifi)
@@ -53,6 +58,16 @@ template <class T, class U> class APIServerPort : public U, private concurrency:
     explicit APIServerPort(int port);
 
     void init();
+
+#ifdef SIM_MESH
+    /// Input waits on a socket, the listener's or the open connection's: both run now.
+    void simMeshDue()
+    {
+        setIntervalFromNow(0);
+        if (openAPI)
+            openAPI->simMeshDue();
+    }
+#endif
 
   protected:
     int32_t runOnce() override;
