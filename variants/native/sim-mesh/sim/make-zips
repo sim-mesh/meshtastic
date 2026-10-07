@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""meshtasticd for sim-mesh, as firmware zips.
+
+    variants/native/sim-mesh/sim/make-zips [--out DIR] [--no-build] [--arch ARCH]
+
+Run from the repository's root with PlatformIO on PATH and pip in the Python
+running it, sim-mesh's clone beside this repository. meshtasticd is built
+for both aarch64 and x86_64 (--arch: one of them) with `pio run -e
+sim-mesh`: the machine's own natively in .pio/build, the other with its cross
+g++ (g++-<arch>-linux-gnu) in .pio/build.linux-<arch>, SIM_MESH_ARCH telling
+sim-mesh's cross.py and link.py which. Each zip is
+`meshtastic-sx1262-<release>_<arch>_<UTC stamp>.zip` in DIR (default
+.pio/sim-zips), the release read from version.properties. It holds the
+program as `meshtasticd`, the station's host (host.py), the driver
+(driver.py), node.yaml; lib/, every shared library the program loads beyond
+the C library, the C++ runtime and sim-mesh's radio, and theirs, from that
+architecture's multiarch directory (its packages installed there,
+`<pkg>:amd64` for x86_64 on an aarch64 host); and pylib/, the protobuf
+bindings generated from this repository's own protobufs and the pure-Python
+protobuf runtime, checked to import.
+"""
+
+import argparse
+import configparser
+import datetime
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
+ARCHES = ("aarch64", "x86_64")
+ENV = "sim-mesh"
+GRPCIO_TOOLS = "grpcio-tools==1.84.0"
+PROTOBUF = "protobuf==7.36.2"
+CHECK = "from meshtastic import mesh_pb2, admin_pb2, portnums_pb2, config_pb2"
+# What a station may count on (the contract, "What a firmware may count on"),
+# and the radio, which sim-mesh provides: everything else it loads is in lib/.
+PROVIDED = re.compile(r"^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s)\.so|^ld-linux|"
+                      r"^libsimradio-")
+MACHINES = {"AArch64": "aarch64", "Advanced Micro Devices X86-64": "x86_64"}
+
+
+def run(argv, **kwargs):
+    print("+ " + " ".join(argv), flush=True)
+    subprocess.run(argv, check=True, **kwargs)
+
+
+def release():
+    """This tree's release, major.minor.build, from version.properties."""
+    props = configparser.ConfigParser()
+    props.read(os.path.join(ROOT, "version.properties"))
+    v = props["VERSION"]
+    return "%s.%s.%s" % (v["major"].strip(), v["minor"].strip(), v["build"].strip())
+
+
+def elf_arch(path):
+    """The architecture an ELF file is built for."""
+    out = subprocess.run(["readelf", "-h", path], check=True, capture_output=True,
+                         text=True).stdout
+    machine = re.search(r"Machine:\s*(.+)", out).group(1).strip()
+    if machine not in MACHINES:
+        raise SystemExit("%s: built for %s" % (path, machine))
+    return MACHINES[machine]
+
+
+def needed(path):
+    out = subprocess.run(["readelf", "-d", path], check=True, capture_output=True,
+                         text=True).stdout
+    return re.findall(r"\(NEEDED\)\s+Shared library: \[(.+?)\]", out)
+
+
+def bundle_libs(program, arch, dest):
+    """Every library `program` loads that a station is not given, and theirs,
+    copied into `dest` under their sonames: [soname]."""
+    dirs = ["/usr/lib/%s-linux-gnu" % arch, "/lib/%s-linux-gnu" % arch]
+    os.makedirs(dest, exist_ok=True)
+    todo, done = needed(program), []
+    while todo:
+        name = todo.pop(0)
+        if name in done or PROVIDED.search(name):
+            continue
+        found = next((os.path.join(d, name) for d in dirs if os.path.exists(os.path.join(d, name))),
+                     None)
+        if found is None:
+            raise SystemExit("%s needs %s, which no %s directory holds (install its %s package)"
+                             % (program, name, arch, arch))
+        shutil.copyfile(os.path.realpath(found), os.path.join(dest, name))
+        done.append(name)
+        todo += needed(found)
+    return done
+
+
+def pip(*args):
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check",
+                    *args], check=True)
+
+
+def build_pylib(dest):
+    """The bindings and the runtime into `dest`, checked to import under the
+    pure-Python runtime."""
+    protos = os.path.join(ROOT, "protobufs")
+    with tempfile.TemporaryDirectory() as tmp:
+        tools = os.path.join(tmp, "tools")
+        pylib = os.path.join(tmp, "pylib")
+        os.makedirs(pylib)
+        pip("--target", tools, GRPCIO_TOOLS)
+        sources = sorted(os.path.join(protos, "meshtastic", name)
+                         for name in os.listdir(os.path.join(protos, "meshtastic"))
+                         if name.endswith(".proto"))
+        subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I", protos,
+                        "--python_out=" + pylib, *sources, os.path.join(protos, "nanopb.proto")],
+                       check=True, env=dict(os.environ, PYTHONPATH=tools))
+        pip("--target", pylib, "--no-deps", "--only-binary", ":all:", "--platform", "any",
+            "--implementation", "py", "--abi", "none", PROTOBUF)
+        subprocess.run([sys.executable, "-c", CHECK], check=True,
+                       env=dict(os.environ, PYTHONPATH=pylib,
+                                PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="python"))
+        if os.path.exists(dest):
+            shutil.rmtree(dest)
+        shutil.copytree(pylib, dest)
+
+
+def node_yaml(base, arch, version, rel):
+    return ("base: %s\narch: %s\nversion: '%s'\ncategory: meshtastic\nradio: sx1262\n"
+            "title: Meshtastic %s (meshtasticd)\nhardware: Raspberry Pi\nexec: host.py\n"
+            "driver: driver.py\nenv:\n  PYTHONPATH: ./pylib\n"
+            "  PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python\n  LD_LIBRARY_PATH: ./lib\n"
+            % (base, arch, version, rel))
+
+
+def build_dir(arch):
+    native = platform.machine() == arch
+    return os.path.join(ROOT, ".pio", "build" if native else "build.linux-%s" % arch)
+
+
+def build(arch):
+    """meshtasticd for `arch`: natively, or with the cross g++."""
+    env = dict(os.environ)
+    if platform.machine() != arch:
+        env.update(SIM_MESH_ARCH=arch, PLATFORMIO_BUILD_DIR=build_dir(arch))
+    run(["pio", "run", "-e", ENV], cwd=ROOT, env=env)
+    return os.path.join(build_dir(arch), ENV, "meshtasticd")
+
+
+def make_zip(program, arch, pylib, out_dir):
+    if elf_arch(program) != arch:
+        raise SystemExit("%s is built for %s, not %s" % (program, elf_arch(program), arch))
+    rel = release()
+    base = "meshtastic-sx1262-%s" % rel
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
+    path = os.path.join(out_dir, "%s_%s_%s.zip" % (base, arch, stamp))
+    with tempfile.TemporaryDirectory() as tmp:
+        libs = os.path.join(tmp, "lib")
+        bundle_libs(program, arch, libs)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            def put(src, arc, mode):
+                info = zipfile.ZipInfo(arc, date_time=(1980, 1, 1, 0, 0, 0))
+                info.external_attr = (0o100000 | mode) << 16
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with open(src, "rb") as handle:
+                    zf.writestr(info, handle.read())
+            put(program, "meshtasticd", 0o755)
+            put(os.path.join(HERE, "host.py"), "host.py", 0o755)
+            put(os.path.join(HERE, "driver.py"), "driver.py", 0o644)
+            zf.writestr("node.yaml", node_yaml(base, arch, stamp, rel))
+            for each in sorted(os.listdir(libs)):
+                put(os.path.join(libs, each), "lib/" + each, 0o644)
+            for root, _, files in os.walk(pylib):
+                for each in sorted(files):
+                    if not each.endswith(".pyc"):
+                        src = os.path.join(root, each)
+                        put(src, os.path.join("pylib", os.path.relpath(src, pylib)), 0o644)
+    return path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--out", default=os.path.join(ROOT, ".pio", "sim-zips"))
+    parser.add_argument("--no-build", action="store_true",
+                        help="zip what .pio holds already")
+    parser.add_argument("--arch", choices=ARCHES, action="append",
+                        help="only this one (both when not given)")
+    args = parser.parse_args()
+    os.makedirs(args.out, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        pylib = os.path.join(tmp, "pylib")
+        build_pylib(pylib)
+        for arch in args.arch or ARCHES:
+            program = (os.path.join(build_dir(arch), ENV, "meshtasticd") if args.no_build
+                       else build(arch))
+            print(make_zip(program, arch, pylib, args.out), flush=True)
+
+
+if __name__ == "__main__":
+    main()
