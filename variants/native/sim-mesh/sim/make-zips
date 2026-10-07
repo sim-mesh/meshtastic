@@ -14,7 +14,9 @@ and its libraries from the multiarch packages, in .pio/build.linux-<arch>,
 SIM_MESH_ARCH telling sim-mesh's cross.py and link.py which. Each zip is
 `meshtastic-sx1262-<release>_<arch>_<UTC stamp>.zip` in DIR (default
 .pio/sim-zips), the release read from version.properties. It holds the
-program as `meshtasticd`, the station's host (host.py), the driver
+program, stripped of its symbols and debug sections (by strip, or
+<arch>-linux-gnu-strip for another architecture), as `meshtasticd`, the
+station's host (host.py), the driver
 (driver.py), node.yaml; lib/, every shared library the program loads beyond
 the C library, the C++ runtime and sim-mesh's radio, and theirs, from that
 architecture's multiarch directory (its packages installed there,
@@ -165,6 +167,13 @@ def build(arch):
     return os.path.join(build_dir(arch), ENV, "meshtasticd")
 
 
+def stripped(program, arch, dest):
+    """`program` without its symbols and debug sections, at `dest`."""
+    tool = "strip" if platform.machine() == arch else "%s-linux-gnu-strip" % arch
+    run([tool, "--strip-all", "-o", dest, program])
+    return dest
+
+
 def make_zip(program, arch, pylib, out_dir):
     if elf_arch(program) != arch:
         raise SystemExit("%s is built for %s, not %s" % (program, elf_arch(program), arch))
@@ -173,6 +182,7 @@ def make_zip(program, arch, pylib, out_dir):
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S")
     path = os.path.join(out_dir, "%s_%s_%s.zip" % (base, arch, stamp))
     with tempfile.TemporaryDirectory() as tmp:
+        program = stripped(program, arch, os.path.join(tmp, "meshtasticd"))
         libs = os.path.join(tmp, "lib")
         bundle_libs(program, arch, libs)
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:

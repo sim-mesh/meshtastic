@@ -63,6 +63,10 @@ machine of its own architecture: `.github/workflows/build_sim_mesh.yml`
 runs `make-zips` on an x86_64 and an arm64 runner and keeps each zip as an
 artifact.
 
+The zip's `meshtasticd` is stripped of its symbols and debug sections,
+which are some 30 MB of the 32 MB build; `.pio/build/sim-mesh/meshtasticd`
+keeps them for debugging.
+
 meshtasticd loads libraries beyond the C library and the C++ runtime
 (yaml-cpp, libusb, libi2c and theirs), so `make-zips` puts them in the
 zip's `lib/`, from the architecture's multiarch directory. It fills the
