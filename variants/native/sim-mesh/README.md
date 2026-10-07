@@ -37,49 +37,54 @@ meshtasticd ── RadioLib ──► sim-mesh radio/portduino ──► the eth
   one transaction, since meshtasticd reboots after each. In a virtual-time
   run it joins the ether as a station of its own, with no radio.
 - `sim/driver.py`: the sim-mesh driver, category `meshtastic`.
-- `sim/make-zips`: builds `[env:sim-mesh]` for aarch64 and x86_64 and makes
-  the firmware zips.
+- `sim/make-zips`: builds `[env:sim-mesh]` and makes the firmware zip, for
+  the machine's own architecture or the ones asked for.
+- `.github/workflows/build_sim_mesh.yml`: the zip for x86_64 and for
+  aarch64, each on a runner of its own architecture.
 - `sim/test_host.py`, `sim/test_driver.py`: the host against a fake
   meshtasticd, and the driver against a stand-in station.
 
 ## Building
 
-PlatformIO, and sim-mesh's clone beside this repository (`../sim-mesh`,
-whose `radio/build/` holds `libsimradio-sx1262.so` once sim-mesh has
-started, or `cmake -S ../sim-mesh/radio -B ../sim-mesh/radio/build && cmake
---build ../sim-mesh/radio/build`). Portduino needs the headers of libuv,
-i2c-tools, libgpiod, yaml-cpp, libbsd and OpenSSL (`libuv1-dev libi2c-dev
-libgpiod-dev libyaml-cpp-dev libbsd-dev libssl-dev` on Ubuntu).
+As every native build: PlatformIO and the native build's libraries (what
+`.github/actions/setup-native` installs, or the `Dockerfile`'s builder
+stage), and besides them sim-mesh's clone beside this repository
+(`../sim-mesh`), whose radio library the program links. `make-zips` builds
+that library (`cmake`, into `../sim-mesh/radio/build/`) when the clone has
+none yet, then the program for this machine's architecture, then the zip:
 
 ```sh
 pio run -e sim-mesh                          # .pio/build/sim-mesh/meshtasticd
-variants/native/sim-mesh/sim/make-zips       # both architectures, in .pio/sim-zips/
+variants/native/sim-mesh/sim/make-zips       # this machine's architecture, in .pio/sim-zips/
 ```
 
-**Both architectures.** sim-mesh's pre-built firmware carries aarch64 and
-x86_64, so `make-zips` builds for both (`--arch` for one): the machine's own
-natively in `.pio/build/`, the other in `.pio/build.linux-<arch>/` with that
-architecture's cross g++ (`g++-x86-64-linux-gnu` or
-`g++-aarch64-linux-gnu`). `SIM_MESH_ARCH=<arch>` in pio's environment
+sim-mesh's pre-built firmware carries aarch64 and x86_64, each built on a
+machine of its own architecture: `.github/workflows/build_sim_mesh.yml`
+runs `make-zips` on an x86_64 and an arm64 runner and keeps each zip as an
+artifact.
+
+meshtasticd loads libraries beyond the C library and the C++ runtime
+(yaml-cpp, libusb, libi2c and theirs), so `make-zips` puts them in the
+zip's `lib/`, from the architecture's multiarch directory. It fills the
+zip's `pylib/` with the protobuf bindings generated from this repository's
+own `protobufs` and the pure-Python protobuf runtime, fetching
+`grpcio-tools` and `protobuf` from PyPI with the pip of the Python running
+it. The zip's base names the release, from `version.properties`
+(`meshtastic-sx1262-2.7.26_aarch64_<stamp>.zip`), and goes to sim-mesh with
+`sim firmware add <zip>`.
+
+**Another architecture on the same machine.** `--arch` builds for another
+architecture than the machine's own (more than one `--arch` for several),
+in `.pio/build.linux-<arch>/`, with that architecture's cross g++
+(`g++-x86-64-linux-gnu` or `g++-aarch64-linux-gnu`) and the native build's
+libraries for it from the multiarch packages (`libyaml-cpp-dev:amd64` and
+the rest on an arm64 machine). `SIM_MESH_ARCH=<arch>` in pio's environment
 selects it: sim-mesh's `radio/portduino/cross.py` swaps in the cross tools,
 and its `link.py` compiles the radio with them and links that copy. By hand:
 
 ```sh
 SIM_MESH_ARCH=x86_64 PLATFORMIO_BUILD_DIR=.pio/build.linux-x86_64 pio run -e sim-mesh
 ```
-
-meshtasticd loads libraries beyond the C library and the C++ runtime
-(yaml-cpp, libusb, libi2c and theirs), so `make-zips` puts them in the
-zip's `lib/`, from each architecture's multiarch directory: for every
-architecture it builds for, that architecture's `libyaml-cpp-dev`,
-`libuv1-dev`, `libi2c-dev`, `libusb-1.0-0-dev`, `libssl-dev` and
-`libgpiod-dev` must be installed (`:amd64` on an aarch64 host). It fills
-the zip's `pylib/` with the protobuf bindings generated from this
-repository's own `protobufs` and the pure-Python protobuf runtime, fetching
-`grpcio-tools` and `protobuf` from PyPI with the pip of the Python running
-it. The zip's base names the release, from `version.properties`
-(`meshtastic-sx1262-2.7.26_aarch64_<stamp>.zip`), and goes to sim-mesh with
-`sim firmware add <zip>`.
 
 The tests run with sim-mesh's Python environment (its `testbed/` gives
 `sim_mesh.driver`); `test_host.py` builds the bindings into `sim/.pylib`

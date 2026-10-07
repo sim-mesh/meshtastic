@@ -1,0 +1,61 @@
+name: Build sim-mesh firmware zips
+
+# meshtasticd as a sim-mesh station (variants/native/sim-mesh), one zip per
+# architecture, each built natively on a runner of its own architecture as
+# the native build always is: the native build's libraries from
+# setup-native, sim-mesh's clone beside this repository for its radio, and
+# variants/native/sim-mesh/sim/make-zips.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [sim-mesh]
+    paths:
+      - variants/native/sim-mesh/**
+      - src/**
+      - .github/workflows/build_sim_mesh.yml
+
+permissions:
+  contents: read
+
+jobs:
+  sim-mesh-zip:
+    name: sim-mesh zip (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-24.04
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Setup native build
+        uses: ./.github/actions/setup-native
+
+      # A checkout stays inside the workspace; the variant takes sim-mesh from
+      # beside this repository, so it is moved there.
+      - name: Checkout sim-mesh
+        uses: actions/checkout@v7
+        with:
+          repository: sim-mesh/sim-mesh
+          path: .sim-mesh
+
+      - name: Put sim-mesh beside this repository
+        run: mv .sim-mesh ../sim-mesh
+
+      - name: Build the zip
+        run: python variants/native/sim-mesh/sim/make-zips --out sim-zips
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: sim-mesh-${{ matrix.arch }}
+          path: sim-zips/*.zip
+          if-no-files-found: error
